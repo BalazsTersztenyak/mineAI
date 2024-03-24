@@ -1,0 +1,11 @@
+version: '3.8'
+services:
+  minedojo:
+    image: env
+    runtime: nvidia
+    ports:
+      - "8080:8080"
+    volumes:
+      - /home/ubuntu/tarolo/volume:/home/user/volume
+    command: tail -f /dev/null
+

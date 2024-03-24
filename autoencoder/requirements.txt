@@ -1,0 +1,6 @@
+torch
+torchvision
+pandas
+pytube
+pillow
+moviepy
