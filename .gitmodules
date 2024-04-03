@@ -1,0 +1,3 @@
+[submodule "Video-Pre-Training"]
+	path = Video-Pre-Training
+	url = https://github.com/openai/Video-Pre-Training
