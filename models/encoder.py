@@ -8,19 +8,21 @@ class Autoencoder(nn.Module):
         """
         super(Autoencoder, self).__init__()
         self.encoder = nn.Sequential(
-            nn.Conv2d(3, 16, 3, stride=2, padding=1),  # b, 16, 180, 320
+            nn.Conv2d(3, 8, 3, stride=2, padding=1),  # b, 16, 180, 320
             nn.ReLU(True),
-            nn.Conv2d(16, 32, 3, stride=2, padding=1),  # b, 32, 90, 160
+            nn.Conv2d(8, 12, 3, stride=2, padding=1),  # b, 32, 90, 160
             nn.ReLU(True),
-            nn.Conv2d(32, 64, 3, stride=2, padding=1),  # b, 64, 45, 80
-            nn.ReLU(True)
+            nn.Conv2d(12, 16, 3, stride=2, padding=1),  # b, 64, 45, 80
+            nn.ReLU(True),
+            nn.Flatten(1, -1)
         )
         self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(64, 32, 3, stride=2, padding=1, output_padding=1),  # b, 32, 90, 160
+            nn.Unflatten(1, (16, 45, 80)),
+            nn.ConvTranspose2d(16, 12, 3, stride=2, padding=1, output_padding=1),  # b, 32, 90, 160
             nn.ReLU(True),
-            nn.ConvTranspose2d(32, 16, 3, stride=2, padding=1, output_padding=1),  # b, 16, 180, 320
+            nn.ConvTranspose2d(12, 8, 3, stride=2, padding=1, output_padding=1),  # b, 16, 180, 320
             nn.ReLU(True),
-            nn.ConvTranspose2d(16, 3, 3, stride=2, padding=1, output_padding=1),  # b, 3, 360, 640
+            nn.ConvTranspose2d(8, 3, 3, stride=2, padding=1, output_padding=1),  # b, 3, 360, 640
             nn.Sigmoid()
         )
 
