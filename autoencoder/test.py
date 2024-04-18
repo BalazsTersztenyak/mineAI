@@ -27,11 +27,11 @@ count = 0
 # Iterate over each frame in the video clip
 for frame in clip.iter_frames():
     # Save only every Nth frame
-    if count != 500:
+    if count % 500 != 0:
         count += 1
         continue
 
-    path = "test.png"
+    path = f"dataset/test_frames/test_{count}.png"
     # Convert the frame to a PIL Image
     pil_image = Image.fromarray(frame)
 
