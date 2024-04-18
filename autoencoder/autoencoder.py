@@ -1,23 +1,38 @@
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 import pandas as pd
+import numpy as np
 from pytube import YouTube
 from PIL import Image
 import os
 from moviepy.editor import VideoFileClip
-import time
-import requests
+from time import time
 from minedojo.data import YouTubeDataset
-import math
+from models.encoder import Autoencoder
+
+# Hyperparameters
+NUM_EPOCHS = 1
+BATCH_SIZE = 32
+LEARNING_RATE = 0.001
+N_FRAME = 5
+N_VIDS = 1
+
+# Define data augmentation transforms
+TRANSFORM = transforms.Compose([
+    transforms.Resize((360, 640)),  # Resize images to 640x360
+    transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),  # Randomly translate the image
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # Adjust brightness, contrast, saturation, and hue
+    transforms.ToTensor(),
+])
 
 # Define the dataset
-class CustomDataset(torch.utils.data.Dataset):
-    def __init__(self, folder_path, transform=None):
+class CustomDataset(Dataset):
+    def __init__(self, folder_path):
         self.folder_path = folder_path
         self.image_files = os.listdir(folder_path)
-        self.transform = transform
+        self.transform = TRANSFORM
 
     def __len__(self):
         return len(self.image_files)
@@ -34,53 +49,11 @@ class CustomDataset(torch.utils.data.Dataset):
         except:
             print(f"Couldn't load image: {image_path}")
 
-# Autoencoder model
-class Autoencoder(nn.Module):
-    def __init__(self):
-        """
-        Initialize the Autoencoder class with encoder and decoder layers using nn.Sequential and nn.Conv2d/nn.ConvTranspose2d.
-        """
-        super(Autoencoder, self).__init__()
-        self.encoder = nn.Sequential(
-            nn.Conv2d(3, 16, 3, stride=2, padding=1),  # b, 16, 180, 320
-            nn.ReLU(True),
-            nn.Conv2d(16, 32, 3, stride=2, padding=1),  # b, 32, 90, 160
-            nn.ReLU(True),
-            nn.Conv2d(32, 64, 3, stride=2, padding=1),  # b, 64, 45, 80
-            nn.ReLU(True)
-        )
-        self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(64, 32, 3, stride=2, padding=1, output_padding=1),  # b, 32, 90, 160
-            nn.ReLU(True),
-            nn.ConvTranspose2d(32, 16, 3, stride=2, padding=1, output_padding=1),  # b, 16, 180, 320
-            nn.ReLU(True),
-            nn.ConvTranspose2d(16, 3, 3, stride=2, padding=1, output_padding=1),  # b, 3, 360, 640
-            nn.Sigmoid()
-        )
-
-    def forward(self, x):
-        """
-        Perform the forward pass through the encoder and decoder and return the result.
-        
-        Args:
-            x: Input data to be processed.
-            
-        Returns:
-            The output of the forward pass.
-        """
-        x = self.encoder(x)
-        x = self.decoder(x)
-        return x
-
+# Download dataset
 def download_videos():
     """
     Function to download videos and process frames. It takes the number of videos to download as input and does not return anything.
     """
-
-    response = requests.get("https://zenodo.org/records/6693792/files/youtube_full.json?download=1")
-
-    with open('data/dataset/youtube_full.json', 'wb') as f:
-        f.write(response.content)
 
     # Check progress file and set videos_done
     try:
@@ -92,7 +65,10 @@ def download_videos():
             videos_done = 0
 
     # Get video URLs based on progress
-    urls = df['link'][videos_done:videos_done+n_vids]
+    urls = df['link'][videos_done:videos_done+N_VIDS]
+
+    os.makedirs('./data/dataset/frames', exist_ok=True)
+    os.makedirs('./data/dataset/videos', exist_ok=True)
 
     # Download videos and process frames
     for url in urls:
@@ -105,7 +81,7 @@ def download_videos():
             video = yt.streams.filter(res="360p").first()
             video.download('./data/dataset/videos')
     
-    start = time.time()
+    start = time()
 
     # Iterate through downloaded videos
     for video in os.listdir('./data/dataset/videos'):
@@ -119,7 +95,7 @@ def download_videos():
         # Iterate over each frame in the video clip
         for frame in clip.iter_frames():
             # Save only every Nth frame
-            if count % n_part != 0:
+            if count % N_FRAME != 0:
                 count += 1
                 continue
 
@@ -136,10 +112,10 @@ def download_videos():
             # Save the PIL Image as PNG
             pil_image.save(path)
 
-            # Log every n_part*100th
-            if count % (100 * n_part) == 0:
-                now = time.time()
-                diff = math.round(now - start, 2)
+            # Log every N_FRAME*100th frame
+            if count % (100 * N_FRAME) == 0:
+                now = time()
+                diff = np.round(now - start, 2)
                 start = now
                 print(f"Video: {video}, frame: {count}, time: {diff}")
 
@@ -147,14 +123,11 @@ def download_videos():
 
         # Close the video clip
         clip.close()
-        print(f'Video {video} sliced. Saved frames: {math.floor(count / n_part)}')
+        print(f'Video {video} sliced. Saved frames: {np.floor(count / N_FRAME)}')
 
         # Remove downloaded video
         os.remove(os.path.join('./data/dataset/videos', video))
 
-    # Update progress file
-    with open('progress', 'w') as file:
-        file.write(str(videos_done+n_vids))
 
 def model_setup():
     """
@@ -169,28 +142,28 @@ def model_setup():
 
     # Loss function and optimizer
     criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
     
     # Assuming you have your dataset loaded into 'images' variable as a list of PIL images
-    train_dataset = CustomDataset('./data/dataset/frames', transform=transform)
+    train_dataset = CustomDataset('./data/dataset/frames')
 
     # Data loader
-    train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(dataset=train_dataset, batch_size=BATCH_SIZE, shuffle=True)
 
     print('Model setup Done')
 
-def train(cycle=0):
+def train(video=0):
     """
-    Trains a model using the given train_loader, criterion, and optimizer for the specified number of epochs. Optionally, it can also specify the cycle number. 
+    Trains a model using the given train_loader, criterion, and optimizer for the specified number of epochs. Optionally, it can also specify the video number. 
 
     Args:
         model: The model to be trained.
         train_loader: The data loader for training data.
         criterion: The loss function.
         optimizer: The optimization algorithm.
-        num_epochs: The number of epochs to train the model.
-        cycle (optional): The cycle number (default is 0).
+        NUM_EPOCHS: The number of epochs to train the model.
+        video (optional): The video number (default is 0).
 
     Returns:
         None
@@ -198,12 +171,14 @@ def train(cycle=0):
 
     print('Train started...')
 
-    start = time.time()
+    os.makedirs('./data/checkpoints', exist_ok=True)
+
+    start = time()
 
     # Training
     total_step = len(train_loader)
     losses = []
-    for epoch in range(num_epochs):
+    for epoch in range(NUM_EPOCHS):
         for i, images in enumerate(train_loader):
             # Forward pass
             outputs = model(images)
@@ -216,20 +191,20 @@ def train(cycle=0):
             optimizer.step()
 
             if (i+1) % 100 == 0:
-                now = time.time()
-                diff = math.round(now - start, 2)
+                now = time()
+                diff = np.round(now - start, 2)
                 start = now
 
                 print ('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}, time: {}'
-                    .format(epoch+1, num_epochs, i+1, total_step, loss.item(), diff))
+                    .format(epoch+1, NUM_EPOCHS, i+1, total_step, loss.item(), diff))
         
                    
     # Save the model checkpoint
-    torch.save(model.state_dict(), os.path.join('./data/checkpoints', f'model_{cycle}.ckpt'))
+    torch.save(model.state_dict(), os.path.join('./data/checkpoints', f'model_{video}.ckpt'))
     print('Model saved')
 
     # Save the losses
-    with open(os.path.join('./data/checkpoints', f'losses_{cycle}.txt'), 'w') as file:
+    with open(os.path.join('./data/checkpoints', f'losses_{video}.txt'), 'w') as file:
         for loss in losses:
             file.write(str(loss.item()) + '\n')
 
@@ -237,7 +212,7 @@ def train(cycle=0):
     os.rmdir(train_loader.dataset.folder_path)
     
 def setup():
-    global df, num_epochs, batch_size, learning_rate, n_part, n_vids, transform
+    global df
     
     # Download dataset
     youtube_dataset = YouTubeDataset(
@@ -252,34 +227,24 @@ def setup():
 
     df = pd.read_json('./data/dataset/youtube_full.json')
 
-    # Hyperparameters
-    num_epochs = 1
-    batch_size = 32
-    learning_rate = 0.001
-    n_part = 5
-    n_vids = 1
-
     # Making the code device-agnostic
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using {device}")
 
-    # Define data augmentation transforms
-    transform = transforms.Compose([
-        transforms.Resize((360, 640)),  # Resize images to 640x360
-        transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),  # Randomly translate the image
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # Adjust brightness, contrast, saturation, and hue
-        transforms.ToTensor(),
-    ])
-
 def train_loop():
-    cycle = 0
+    video = 0
 
-    while cycle < 1: #df.shape[0]:
-        print(f"Training cycle {cycle}")
+    while video < df.shape[0]:
+        print(f"Training video {video}")
         download_videos()
         model_setup()
-        train(cycle)
-        cycle += 1
+        train(video)
+
+        # Update progress file
+        with open('progress', 'w') as file:
+            file.write(str(videos_done+N_VIDS))
+            
+        video += 1
 
 def main():
     setup()
