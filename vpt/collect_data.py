@@ -85,7 +85,7 @@ def main():
         if(id % 10_000 == 0):
             print(f'---Saving {id-9_999}-{id}---')
             # df['pov'] = df['pov'].apply(lambda x: x.tobytes())
-            df.to_pickle(f'data_{id-9_999}-{id}.tar.gz')
+            df.to_pickle(f'data/data_{id-9_999}-{id}.pkl.gz')
             df = pd.DataFrame(columns=['pov', 'pos', 'yaw', 'pitch', 'reward', 'done', 'info'])
             print(f'---Saved---')
             done = True
