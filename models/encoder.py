@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torchinfo import summary
 
 class Autoencoder(nn.Module):
     def __init__(self):
@@ -8,21 +9,27 @@ class Autoencoder(nn.Module):
         """
         super(Autoencoder, self).__init__()
         self.encoder = nn.Sequential(
-            nn.Conv2d(3, 8, 3, stride=2, padding=1),  # b, 16, 180, 320
+            nn.Conv2d(3, 9, 7, stride=5, padding=3),  # b, 8, 72, 128
             nn.ReLU(True),
-            nn.Conv2d(8, 12, 3, stride=2, padding=1),  # b, 32, 90, 160
+            nn.Conv2d(9, 12, 5, stride=2, padding=2),  # b, 16, 36, 64
             nn.ReLU(True),
-            nn.Conv2d(12, 16, 3, stride=2, padding=1),  # b, 64, 45, 80
+            nn.Conv2d(12, 15, 3, stride=2, padding=1),  # b, 32, 18, 32
             nn.ReLU(True),
-            nn.Flatten(1, -1)
+            nn.Conv2d(15, 18, 3, stride=2, padding=1),  # b, 64, 9, 16
+            nn.ReLU(True),
+            nn.Flatten(1, -1),
+            nn.Linear(18*9*16, 2048)
         )
         self.decoder = nn.Sequential(
-            nn.Unflatten(1, (16, 45, 80)),
-            nn.ConvTranspose2d(16, 12, 3, stride=2, padding=1, output_padding=1),  # b, 32, 90, 160
+            nn.Linear(2048, 18*9*16),
+            nn.Unflatten(1, (18, 9, 16)),
+            nn.ConvTranspose2d(18, 15, 3, stride=2, padding=1, output_padding=1),  # b, 12, 18, 32
             nn.ReLU(True),
-            nn.ConvTranspose2d(12, 8, 3, stride=2, padding=1, output_padding=1),  # b, 16, 180, 320
+            nn.ConvTranspose2d(15, 12, 3, stride=2, padding=1, output_padding=1),  # b, 9, 36, 64
             nn.ReLU(True),
-            nn.ConvTranspose2d(8, 3, 3, stride=2, padding=1, output_padding=1),  # b, 3, 360, 640
+            nn.ConvTranspose2d(12, 9, 5, stride=2, padding=2, output_padding=1),  # b, 6, 72, 128
+            nn.ReLU(True),
+            nn.ConvTranspose2d(9, 3, 7, stride=5, padding=3, output_padding=4),  # b, 3, 360, 640
             nn.Sigmoid()
         )
 
@@ -53,3 +60,6 @@ class Autoencoder(nn.Module):
         """
         x = self.encoder(x)
         return x
+
+    def summary(self):
+        summary(self, (1, 3, 360, 640))

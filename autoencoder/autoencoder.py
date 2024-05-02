@@ -1,30 +1,32 @@
 import torch
-import torch.nn as nn
+from torch.nn import MSELoss, L1Loss
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Dataset
 import pandas as pd
-import numpy as np
+# import numpy as np
 from pytube import YouTube
 from PIL import Image
 import os
 from moviepy.editor import VideoFileClip
-from time import time
 from minedojo.data import YouTubeDataset
 from models.encoder import Autoencoder
+import shutil
+from tqdm import tqdm
+import math
+from accelerate import Accelerator
 
 # Hyperparameters
 NUM_EPOCHS = 1
 BATCH_SIZE = 32
 LEARNING_RATE = 0.001
-N_FRAME = 5
-N_VIDS = 1
+N_FRAME_PER_VID = 4096
 
 # Define data augmentation transforms
 TRANSFORM = transforms.Compose([
     transforms.Resize((360, 640)),  # Resize images to 640x360
-    transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),  # Randomly translate the image
+    transforms.RandomAffine(degrees=0, translate=(0.01, 0.01)),  # Randomly translate the image
     transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # Adjust brightness, contrast, saturation, and hue
-    transforms.ToTensor(),
+    transforms.ToTensor()
 ])
 
 # Define the dataset
@@ -43,108 +45,117 @@ class CustomDataset(Dataset):
             image = Image.open(image_path).convert('RGB')
 
             if self.transform:
-                image = self.transform(image)
+                image = self.transform(image).to('cuda')
 
             return image
         except:
             print(f"Couldn't load image: {image_path}")
 
 # Download dataset
-def download_videos():
+def download_videos(idx = 0):
     """
     Function to download videos and process frames. It takes the number of videos to download as input and does not return anything.
     """
 
-    # Check progress file and set videos_done
-    try:
-        with open('progress', 'r') as file:
-            videos_done = int(file.readline())
-    except:
-        with open('progress', 'w') as file:
-            file.write('0')
-            videos_done = 0
-
-    # Get video URLs based on progress
-    urls = df['link'][videos_done:videos_done+N_VIDS]
-
     os.makedirs('./data/dataset/frames', exist_ok=True)
     os.makedirs('./data/dataset/videos', exist_ok=True)
+    success = False
+    while not success:
 
-    # Download videos and process frames
-    for url in urls:
+        # Get video URLs based on progress
+        url = df['link'][idx]
+        length = df['duration'][idx]
+        fps = df['fps'][idx]
+        n_frames = math.floor(length * fps)
+        frac_part = math.floor(n_frames / N_FRAME_PER_VID)
+        
+        # Download videos and process frames
         try:
             yt = YouTube(url)
-        except:
-            print(f"Video {url} unavailable, skipping")
-        else:
             print(f"Video {url} downloading")
             video = yt.streams.filter(res="360p").first()
+        except:
+            print(f"Video {url} unavailable, skipping")
+            idx += 1
+        else:
             video.download('./data/dataset/videos')
+            success = True
     
-    start = time()
-
     # Iterate through downloaded videos
     for video in os.listdir('./data/dataset/videos'):
         clip = VideoFileClip(os.path.join('./data/dataset/videos', video))
 
-        # Initialize frame count
-        count = 0
-
         print(f"Converting video: {video}")
+        counter = 0
+        n_saved = 0
+        with tqdm(total=N_FRAME_PER_VID, desc=f"Video: {url}") as pbar:
+            # Iterate over each frame in the video clip
+            for frame in clip.iter_frames():
+                # Save only every Nth frame
+                if counter % frac_part != 0:
+                    counter += 1
+                    continue
+                
+                path = f"./data/dataset/frames/{video}_{counter}.png"
 
-        # Iterate over each frame in the video clip
-        for frame in clip.iter_frames():
-            # Save only every Nth frame
-            if count % N_FRAME != 0:
-                count += 1
-                continue
+                # Skip if it exists (used only during testing)
+                if os.path.exists(path):
+                    counter += 1
+                    n_saved += 1
+                    pbar.update(1)
+                    continue
 
-            path = f"./data/dataset/frames/{video}_{count}.png"
-            
-            # Skip if it exists (used only during testing)
-            if os.path.exists(path):
-                count += 1
-                continue
+                # Convert the frame to a PIL Image
+                pil_image = Image.fromarray(frame)
 
-            # Convert the frame to a PIL Image
-            pil_image = Image.fromarray(frame)
+                # Save the PIL Image as PNG
+                pil_image.save(path)
 
-            # Save the PIL Image as PNG
-            pil_image.save(path)
+                counter += 1
+                n_saved += 1
 
-            # Log every N_FRAME*100th frame
-            if count % (100 * N_FRAME) == 0:
-                now = time()
-                diff = np.round(now - start, 2)
-                start = now
-                print(f"Video: {video}, frame: {count}, time: {diff}")
+                if n_saved >= N_FRAME_PER_VID:
+                    break
 
-            count += 1
+                pbar.update(1)
 
         # Close the video clip
         clip.close()
-        print(f'Video {video} sliced. Saved frames: {np.floor(count / N_FRAME)}')
+        print(f'Video {video} sliced.')
 
         # Remove downloaded video
         os.remove(os.path.join('./data/dataset/videos', video))
 
+        # Update progress file
+        with open('progress', 'w') as file:
+            file.write(str(idx+1))
 
-def model_setup():
+    return idx
+
+def model_setup(mse):
     """
     Function to initialize the autoencoder, define the loss function and optimizer, and return the model, criterion, and optimizer.
     """
 
     print('Start model setup')
 
-    global model, criterion, optimizer, train_loader
+    global model
 
-    model = Autoencoder()
+    model = Autoencoder().to(device)
+    model.summary()
+    model = accelerator.prepare(model)
+
+def update_model(mse):
+    global criterion, optimizer, train_loader
 
     # Loss function and optimizer
-    criterion = nn.MSELoss()
+    if(mse):
+        criterion = MSELoss()
+    else:
+        criterion = L1Loss()
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    optimizer = accelerator.prepare(optimizer)
 
-    
     # Assuming you have your dataset loaded into 'images' variable as a list of PIL images
     train_dataset = CustomDataset('./data/dataset/frames')
 
@@ -153,7 +164,7 @@ def model_setup():
 
     print('Model setup Done')
 
-def train(video=0):
+def train(video):
     """
     Trains a model using the given train_loader, criterion, and optimizer for the specified number of epochs. Optionally, it can also specify the video number. 
 
@@ -163,7 +174,7 @@ def train(video=0):
         criterion: The loss function.
         optimizer: The optimization algorithm.
         NUM_EPOCHS: The number of epochs to train the model.
-        video (optional): The video number (default is 0).
+        video (optional): The video number.
 
     Returns:
         None
@@ -173,31 +184,27 @@ def train(video=0):
 
     os.makedirs('./data/checkpoints', exist_ok=True)
 
-    start = time()
-
     # Training
     total_step = len(train_loader)
     losses = []
     for epoch in range(NUM_EPOCHS):
-        for i, images in enumerate(train_loader):
-            # Forward pass
-            outputs = model(images)
-            loss = criterion(outputs, images)
-            losses.append(loss)
+        with tqdm(total=len(train_loader), desc=f"Training on video {video}: ") as pbar:
+            for images in train_loader:
+                # Forward pass
+                images = accelerator.prepare(images.to('cuda')) 
+                outputs = model(images)
+                outputs = outputs.to('cpu')
+                images = images.to('cpu')
+                loss = criterion(outputs, images)
+                losses.append(loss)
 
-            # Backward and optimize
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+                # Backward and optimize
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                pbar.update(1)
 
-            if (i+1) % 100 == 0:
-                now = time()
-                diff = np.round(now - start, 2)
-                start = now
-
-                print ('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}, time: {}'
-                    .format(epoch+1, NUM_EPOCHS, i+1, total_step, loss.item(), diff))
-        
+        print(f'Epoch [{epoch+1}/{NUM_EPOCHS}], Loss: {loss.item()}')
                    
     # Save the model checkpoint
     torch.save(model.state_dict(), os.path.join('./data/checkpoints', f'model_{video}.ckpt'))
@@ -209,10 +216,10 @@ def train(video=0):
             file.write(str(loss.item()) + '\n')
 
     # Remove the frames folder
-    os.rmdir(train_loader.dataset.folder_path)
+    shutil.rmtree(train_loader.dataset.folder_path)
     
 def setup():
-    global df
+    global df, device, accelerator
     
     # Download dataset
     youtube_dataset = YouTubeDataset(
@@ -228,23 +235,24 @@ def setup():
     df = pd.read_json('./data/dataset/youtube_full.json')
 
     # Making the code device-agnostic
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    accelerator = Accelerator()
+    device = accelerator.device
     print(f"Using {device}")
 
 def train_loop():
     video = 0
-
-    while video < df.shape[0]:
+    switch_rate = 50
+    mse = True
+    model_setup(mse)
+    idx = 0
+    while video < 4*switch_rate: #df.shape[0]:
         print(f"Training video {video}")
-        download_videos()
-        model_setup()
+        idx = download_videos(idx) + 1
+        update_model(mse)
         train(video)
-
-        # Update progress file
-        with open('progress', 'w') as file:
-            file.write(str(videos_done+N_VIDS))
-            
         video += 1
+        if(video % switch_rate == 0):
+            mse = not mse
 
 def main():
     setup()
