@@ -3,14 +3,15 @@ import minerl
 import pickle
 import pandas as pd
 import numpy as np
+import tarfile
+import os
 
 from minerl.herobraine.env_specs.human_survival_specs import HumanSurvival
 
 from agent import MineRLAgent, ENV_KWARGS
 
-env = minedojo.make(task_id='survival', image_size=(360, 640))
-
-env.reset()
+STEP_BEFORE_SAVE = 1024
+MAX_STEP = 300_000
 
 def map_range(value):
     # Define your input range
@@ -58,39 +59,45 @@ def main():
     pi_head_kwargs["temperature"] = float(pi_head_kwargs["temperature"])
     agent = MineRLAgent(mock_env, policy_kwargs=policy_kwargs, pi_head_kwargs=pi_head_kwargs)
     agent.load_weights(weights)
-
+    
     mock_env.close()
-
-
 
     print("---Launching Minedojo enviroment (be patient)---")
     env = minedojo.make(task_id='survival', image_size=(360, 640))
     obs = env.reset()
 
     print("---Collecting data---")
-    df = pd.DataFrame(columns=['pov', 'pos', 'yaw', 'pitch', 'reward', 'done', 'info'])
+    df = pd.DataFrame(columns=['pov', 'dx', 'dy', 'dz', 'dyaw', 'dpitch'])
     done = False
     id = 1
     noop = env.action_space.no_op()
     obs['pov'] = np.transpose(obs['rgb'], (1, 2, 0))
-
+    prev_step = [obs['location_stats']['pos'][0], obs['location_stats']['pos'][1], obs['location_stats']['pos'][2], obs['location_stats']['yaw'][0], obs['location_stats']['pitch'][0]]
     while not done:
         action = agent.get_action(obs)
         action = convert_action(noop, action)
         obs, reward, done, info = env.step(action)
         obs['pov'] = np.transpose(obs['rgb'], (1, 2, 0))
+        this_step = [obs['location_stats']['pos'][0], obs['location_stats']['pos'][1], obs['location_stats']['pos'][2], obs['location_stats']['yaw'][0], obs['location_stats']['pitch'][0]]
+        delta = np.array(this_step) - np.array(prev_step)
+        df.loc[len(df.index)] = [obs['pov'], delta[0], delta[1], delta[2], delta[3], delta[4]]
+        prev_step = this_step
+        if(id % STEP_BEFORE_SAVE == 0):
+            print(f'---Saving {id-(STEP_BEFORE_SAVE-1)}-{id}---')
+            df.to_pickle(f'data/data_{id-(STEP_BEFORE_SAVE-1)}-{id}.pkl.gz')
 
-        df.loc[len(df.index)] = [obs['pov'], obs['location_stats']['pos'], obs['location_stats']['yaw'], obs['location_stats']['pitch'], reward, done, info]
-
-        if(id % 10_000 == 0):
-            print(f'---Saving {id-9_999}-{id}---')
-            # df['pov'] = df['pov'].apply(lambda x: x.tobytes())
-            df.to_pickle(f'data/data_{id-9_999}-{id}.pkl.gz')
-            df = pd.DataFrame(columns=['pov', 'pos', 'yaw', 'pitch', 'reward', 'done', 'info'])
+            df = pd.DataFrame(columns=['pov', 'dx', 'dy', 'dz', 'dyaw', 'dpitch'])
             print(f'---Saved---')
-            done = True
+            # done = True
 
         id += 1
+
+        if id > MAX_STEP:
+            done = True
+
+    env.close()
+
+    print("---Done---")
 
 if __name__ == '__main__':
     main()

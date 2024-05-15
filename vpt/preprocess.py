@@ -1,73 +1,108 @@
 import pandas as pd
 import os
+import tarfile
+import torch
+import torch.nn as nn
+import torchvision.transforms as transforms
+import numpy as np
+from PIL import Image
+import models.encoder as encoder
+from tqdm import tqdm
+import shutil
 
 # Directory where your CSV files are located
-input_directory = 'data'
+input_directory = 'data/processed_data/val'
 
 # Directory where you want to save modified CSV files
-output_directory = 'data'
+output_directory = 'data/processed_data/val'
+
+checkpoint_number = 299
+
+transform = transforms.Compose([
+        transforms.Resize((360, 640)),  # Resize images to 640x360
+        transforms.ToTensor(),
+    ])
 
 # List all CSV files in the input directory
-csv_files = [file for file in os.listdir(input_directory) if file.endswith('.csv')]
+files = [file for file in os.listdir(input_directory) if file.endswith('.pkl.gz')]
+files.sort(key=lambda x: int(x.split('.')[0].split('-')[1]))
 
-class Autoencoder(nn.Module):
-    def __init__(self):
-        """
-        Initialize the Autoencoder class with encoder and decoder layers using nn.Sequential and nn.Conv2d/nn.ConvTranspose2d.
-        """
-        super(Autoencoder, self).__init__()
-        self.encoder = nn.Sequential(
-            nn.Conv2d(3, 16, 3, stride=2, padding=1),  # b, 16, 180, 320
-            nn.ReLU(True),
-            nn.Conv2d(16, 32, 3, stride=2, padding=1),  # b, 32, 90, 160
-            nn.ReLU(True),
-            nn.Conv2d(32, 64, 3, stride=2, padding=1),  # b, 64, 45, 80
-            nn.ReLU(True)
-        )
-        self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(64, 32, 3, stride=2, padding=1, output_padding=1),  # b, 32, 90, 160
-            nn.ReLU(True),
-            nn.ConvTranspose2d(32, 16, 3, stride=2, padding=1, output_padding=1),  # b, 16, 180, 320
-            nn.ReLU(True),
-            nn.ConvTranspose2d(16, 3, 3, stride=2, padding=1, output_padding=1),  # b, 3, 360, 640
-            nn.Sigmoid()
-        )
 
-    def forward(self, x):
-        """
-        Perform the forward pass through the encoder and decoder and return the result.
+print('Loading model...')
+model = encoder.Autoencoder()
+
+# Load the trained model
+model.load_state_dict(torch.load(f'data/checkpoints/model_{checkpoint_number}.ckpt'))
+model.eval()
+model = model.cuda()
+
+batch_size = 128
+
+# Loop through each tar.gz file
+with tqdm(total=len(files), desc=f"Processing files... ", position=0) as pbar:
+    for file in files:
+        # Read CSV file into a DataFrame
+        df = pd.read_pickle(os.path.join(input_directory, file))
+        total_images = len(df.index)
+        df.drop('pov_vec', axis=1, inplace=True)
         
-        Args:
-            x: Input data to be processed.
-            
-        Returns:
-            The output of the forward pass.
-        """
-        x = self.encoder(x)
-        # x = self.decoder(x)
-        return x
+        pov_vecs = []
 
-model = Autoencoder()
+        with tqdm(total=total_images, desc=f"Processing {file}... ", position=1, leave=False) as pbar2:
+            for i in range(0, total_images, batch_size):
+                batch_end = min(i + batch_size, total_images)
+                batch_indices = range(i, batch_end)
+                
+                # Extract images for the batch
+                batch_pov = [df.loc[vec, 'pov'] for vec in batch_indices]
+                batch_pov = [Image.fromarray(img, mode='RGB') for img in batch_pov]
+                batch_pov = [transform(img).cuda() for img in batch_pov]
 
-# Loop through each CSV file
-for file in csv_files:
-    # Read CSV file into a DataFrame
-    df = pd.read_csv(os.path.join(input_directory, file))
-    
-    for i, line in iterate(df):
-        vec = model.forward(line['pov'])
-        df.iloc[i]['pov_vec'] = vec
-        if (i > 0):
-            prev_line = df.iloc[i-1]
-            delta = line - prev_line
-            df.iloc[i]['dpos'] = delta['pos']
-            df.iloc[i]['dyaw'] = delta['yaw']
-            df.iloc[i]['dpitch'] = delta['pitch'] 
+                # Stack images into a single tensor
+                batch_pov = torch.stack(batch_pov)
 
-        print(df.iloc[i])
-        break
-    break
-    
-    # Save the modified DataFrame back to a CSV file
-    output_file = os.path.join(output_directory, file)
-    df.to_csv(output_file, index=False)
+                # Forward pass through the model
+                with torch.no_grad():
+                    batch_vec = model.predict(batch_pov)
+                    batch_pov.cpu().detach()
+
+                # Flatten the output vectors
+                batch_vec = torch.flatten(batch_vec, start_dim=1).cpu().detach().numpy()
+                pov_vecs.extend(batch_vec)
+
+                pitches = [df.loc[idx, 'dpitch'] for idx in batch_indices]
+                pitches = torch.tensor(pitches)
+                pitches = pitches / 180 + 1
+                pitches = pitches.detach().cpu().numpy()
+                df.loc[batch_indices, 'dpitch'] = pitches
+
+                yaws = [df.loc[idx, 'dyaw'] for idx in batch_indices]
+                yaws = torch.tensor(yaws)
+                yaws = yaws / 180 + 1
+                yaws = yaws.detach().cpu().numpy()
+                df.loc[batch_indices, 'dyaw'] = yaws
+
+                pbar2.update(batch_size)
+
+            df['pov_vec'] = pov_vecs
+                
+            # Save the modified DataFrame back to a CSV file
+            output_file = os.path.join(output_directory, file)
+            df.to_pickle(output_file)
+
+            # Remove the original.pkl.gz file
+            # os.remove(os.path.join(input_directory, file))
+        
+        pbar.update(1)
+
+# files = [file for file in os.listdir(output_directory) if file.endswith('.pkl.gz')]
+# files.sort(key=lambda x: int(x.split('.')[0].split('-')[1]))
+
+# with tqdm(total=len(files), desc=f"Train-Test split... ", position=0) as pbar:
+#     for i in range(len(files)):
+#         if i < int(len(files) * 0.8):
+#             shutil.move(os.path.join(output_directory, files[i]), os.path.join(output_directory, 'train', files[i]))
+#         else:
+#             shutil.move(os.path.join(output_directory, files[i]), os.path.join(output_directory, 'val', files[i]))
+#         pbar.update(1)
+        
