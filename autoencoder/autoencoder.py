@@ -6,15 +6,15 @@ import pandas as pd
 from pytube import YouTube
 from PIL import Image
 import os
-from moviepy.editor import VideoFileClip
+from moviepy import VideoFileClip
 from minedojo.data import YouTubeDataset
-from models.encoder import Autoencoder
+from ..models.encoder import Autoencoder
 import shutil
 from tqdm import tqdm
 import math
 from models.encoder_dataset import EncoderDataset, TRANSFORM
 import pickle
-
+# TODO : rework the imports
 # Hyperparameters
 N_EPOCH_PER_VIDEO = 5
 BATCH_SIZE = 32
@@ -24,60 +24,57 @@ VIDEO_PATH = './data/dataset/videos'
 FRAMES_PATH = './data/dataset/frames'
 CHECKPOINTS_PATH = './data/checkpoints'
  
-def save_model(video, model, losses):
-    print('Saving model...')
-    os.makedirs(CHECKPOINTS_PATH, exist_ok=True)
+def main():
+    dataset, device = setup()
+    train_loop(dataset, device)
 
-    # Save the model checkpoint
-    torch.save(model.state_dict(), os.path.join(CHECKPOINTS_PATH, f'model_{video}.ckpt'))
-    print('Model saved')
+def setup():
+    if not os.path.exists('./data/dataset/youtube_full.json'):
+        # Download dataset
+        youtube_dataset = YouTubeDataset(
+        full=True,          # full=False for tutorial videos or 
+                    # full=True for general gameplay videos
+        download=True,        # download=True to automatically download data or 
+                    # download=False to load data from download_dir
+        download_dir='data/dataset'
+                    # default: "~/.minedojo". You can also manually download data from
+                    # https://doi.org/10.5281/zenodo.6641142 and put it in download_dir.           
+        )
 
-    # Save the losses
-    with open('loss_list', 'ab') as fp:
-        pickle.dump(losses, fp)
+    df = pd.read_json('./data/dataset/youtube_full.json')
 
-    print('Losses saved')
+    # Making the code device-agnostic
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"Using {device}")
+    return df, device
 
-    # Remove the frames folder
-    shutil.rmtree(FRAMES_PATH)
+def train_loop(dataset, device):
+    model_path = None
+    video = 0
+    model, criterion, optimizer = model_setup(device, model_path)
 
-def train(video, train_loader, model, criterion, optimizer, device):
-    print('Train started...')
+    idx = 0
+    while video < dataset.shape[0]:
+        print(f"Training video {video}")
+        idx = download_videos(dataset, idx) + 1
+        train_loader = update_dataloader()
+        model, losses = train(video, train_loader, model, criterion, optimizer, device)
+        save_model(video, model, losses)
+        video += 1
 
-    # Training
-    total_step = len(train_loader)
-    losses = []
-    for epoch in range(N_EPOCH_PER_VIDEO):
-        with tqdm(total=len(train_loader), desc=f"Training on video {video}: ") as pbar:
-            for images in train_loader:
-                # Forward pass
-                images = images.to(device) 
-                outputs = model(images)
-                outputs = outputs.to('cpu')
-                images = images.to('cpu')
-                loss = criterion(outputs, images)
-                losses.append(loss.item())
+def model_setup(device, model_path = None):
+    print('Start model setup')
 
-                # Backward and optimize
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                pbar.update(1)
+    model = Autoencoder().to(device)
+    model.summary()
 
-        print(f'Epoch [{epoch+1}/{N_EPOCH_PER_VIDEO}], Loss: {loss.item()}')
+    if model_path is not None:
+        model.load_state_dict(torch.load(model_path))
 
-    return model, losses
-   
-def update_dataloader():
-    # Assuming you have your dataset loaded into 'images' variable as a list of PIL images
-    train_dataset = EncoderDataset(FRAMES_PATH)
+    criterion = HuberLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
-    # Data loader
-    train_loader = DataLoader(dataset=train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-
-    print('DataLoader setup Done')
-
-    return train_loader
+    return model, criterion, optimizer
 
 def download_videos(df, idx = 0):
     """
@@ -158,57 +155,60 @@ def download_videos(df, idx = 0):
 
     return idx
 
-def model_setup(device, model_path = None):
-    print('Start model setup')
+def update_dataloader():
+    # Assuming you have your dataset loaded into 'images' variable as a list of PIL images
+    train_dataset = EncoderDataset(FRAMES_PATH) # TODO : rewrite the EncoderDataset class 
 
-    model = Autoencoder().to(device)
-    model.summary()
+    # Data loader
+    train_loader = DataLoader(dataset=train_dataset, batch_size=BATCH_SIZE, shuffle=True) # TODO : rewrite the DataLoader class
 
-    if model_path is not None:
-        model.load_state_dict(torch.load(model_path))
+    print('DataLoader setup Done')
 
-    criterion = HuberLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    return train_loader
 
-    return model, criterion, optimizer
+def train(video, train_loader, model, criterion, optimizer, device):
+    print('Train started...')
 
-def train_loop(dataset, device):
-    model_path = None
-    video = 0
-    model, criterion, optimizer = model_setup(device, model_path)
+    # Training
+    total_step = len(train_loader)
+    losses = []
+    for epoch in range(N_EPOCH_PER_VIDEO):
+        with tqdm(total=len(train_loader), desc=f"Training on video {video}: ") as pbar:
+            for images in train_loader:
+                # Forward pass
+                images = images.to(device) 
+                outputs = model(images)
+                outputs = outputs.to('cpu')
+                images = images.to('cpu')
+                loss = criterion(outputs, images)
+                losses.append(loss.item())
 
-    idx = 0
-    while video < dataset.shape[0]:
-        print(f"Training video {video}")
-        idx = download_videos(dataset, idx) + 1
-        train_loader = update_dataloader()
-        model, losses = train(video, train_loader, model, criterion, optimizer, device)
-        save_model(video, model, losses)
-        video += 1
+                # Backward and optimize
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                pbar.update(1)
 
-def setup():
-    if not os.path.exists('./data/dataset/youtube_full.json'):
-        # Download dataset
-        youtube_dataset = YouTubeDataset(
-        full=True,          # full=False for tutorial videos or 
-                    # full=True for general gameplay videos
-        download=True,        # download=True to automatically download data or 
-                    # download=False to load data from download_dir
-        download_dir='data/dataset'
-                    # default: "~/.minedojo". You can also manually download data from
-                    # https://doi.org/10.5281/zenodo.6641142 and put it in download_dir.           
-        )
+        print(f'Epoch [{epoch+1}/{N_EPOCH_PER_VIDEO}], Loss: {loss.item()}')
 
-    df = pd.read_json('./data/dataset/youtube_full.json')
+    return model, losses
 
-    # Making the code device-agnostic
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f"Using {device}")
-    return df, device
+def save_model(video, model, losses):
+    print('Saving model...')
+    os.makedirs(CHECKPOINTS_PATH, exist_ok=True)
 
-def main():
-    dataset, device = setup()
-    train_loop(dataset, device)
+    # Save the model checkpoint
+    torch.save(model.state_dict(), os.path.join(CHECKPOINTS_PATH, f'model_{video}.ckpt'))
+    print('Model saved')
+
+    # Save the losses
+    with open('loss_list', 'ab') as fp:
+        pickle.dump(losses, fp)
+
+    print('Losses saved')
+
+    # Remove the frames folder
+    shutil.rmtree(FRAMES_PATH)
 
 if __name__ == '__main__':
     main()
