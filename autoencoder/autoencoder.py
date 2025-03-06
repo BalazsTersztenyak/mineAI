@@ -1,18 +1,17 @@
 import torch
-from torch.nn import HuberLoss
-import torchvision.transforms as transforms
-from torch.utils.data import DataLoader, Dataset
+# from torch.nn import HuberLoss
+# import torchvision.transforms as transforms
+# from torch.utils.data import DataLoader, Dataset
 import pandas as pd
-from pytube import YouTube
-from PIL import Image
+import yt_dlp
 import os
-from moviepy import VideoFileClip
+import cv2
 from minedojo.data import YouTubeDataset
-from ..models.encoder import Autoencoder
+# from ..models.encoder import Autoencoder
 import shutil
 from tqdm import tqdm
 import math
-from models.encoder_dataset import EncoderDataset, TRANSFORM
+# from models.encoder_dataset import EncoderDataset, TRANSFORM
 import pickle
 # TODO : rework the imports
 # Hyperparameters
@@ -51,12 +50,13 @@ def setup():
 def train_loop(dataset, device):
     model_path = None
     video = 0
-    model, criterion, optimizer = model_setup(device, model_path)
+    # model, criterion, optimizer = model_setup(device, model_path)
 
-    idx = 0
+    idx = 1
     while video < dataset.shape[0]:
         print(f"Training video {video}")
-        idx = download_videos(dataset, idx) + 1
+        idx = prepare_video(dataset, idx) + 1
+        break
         train_loader = update_dataloader()
         model, losses = train(video, train_loader, model, criterion, optimizer, device)
         save_model(video, model, losses)
@@ -76,18 +76,40 @@ def model_setup(device, model_path = None):
 
     return model, criterion, optimizer
 
-def download_videos(df, idx = 0):
+def prepare_video(df, idx = 0):
     """
     Function to download videos and process frames. It takes the number of videos to download as input and does not return anything.
     """
 
+    # Prepare folders
+    if os.path.exists(FRAMES_PATH):
+        frames = os.listdir(FRAMES_PATH)
+        for frame in frames:
+            os.remove(os.path.join(FRAMES_PATH, frame))
+
+    if os.path.exists(VIDEO_PATH):
+        videos = os.listdir(VIDEO_PATH)
+        for video in videos:
+            os.remove(os.path.join(VIDEO_PATH, video))
+
     os.makedirs(FRAMES_PATH, exist_ok=True)
     os.makedirs(VIDEO_PATH, exist_ok=True)
 
+    idx, url, frac_part = download_video(df, idx)
+    prepare_images(url, frac_part)
+    return idx
+
+def download_video(df, idx):
     success = False
+    ydl_opts = {
+        'format': 'bestvideo[height=360][ext=mp4]',  # Selects only 360p video
+        'outtmpl': f'{VIDEO_PATH}/%(title)s.%(ext)s',
+        'merge_output_format': 'mp4'
+    }
     while not success:
         # Get video URLs based on progress
         url = df['link'][idx]
+        url = 'https://www.youtube.com/watch?v=GnJimSWdNXI'
         length = df['duration'][idx]
         fps = df['fps'][idx]
         n_frames = math.floor(length * fps)
@@ -95,65 +117,50 @@ def download_videos(df, idx = 0):
             frac_part = 1
         else:
             frac_part = math.floor(n_frames / N_FRAME_PER_VID)
-        
+        # print(length, fps, n_frames, frac_part)
         # Download videos and process frames
         try:
-            yt = YouTube(url)
-            video = yt.streams.filter(res="360p").first()
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+            success = True
+            # yt = YouTube(url)
+            # video = yt.streams.filter(res="360p").first()
         except:
             print(f"Video {url} unavailable, skipping")
             idx += 1
-        else:
-            print(f"Video {url} downloading")
-            video.download(VIDEO_PATH)
-            success = True
+
+    return idx, url, frac_part
     
+def prepare_images(url, frac_part):
     # Iterate through downloaded videos
-    for video in os.listdir(VIDEO_PATH):
-        clip = VideoFileClip(os.path.join(VIDEO_PATH, video))
-
-        print(f"Converting video: {video}")
-        counter = 0
-        n_saved = 0
-        with tqdm(total=N_FRAME_PER_VID, desc=f"Video: {url}") as pbar:
-            # Iterate over each frame in the video clip
-            for frame in clip.iter_frames():
-                # Save only every Nth frame
-                if counter % frac_part != 0:
-                    counter += 1
-                    continue
-                
-                path = os.path.join(FRAMES_PATH, f"{video}_{counter}.png")
-
-                # Skip if it exists (used only during testing)
-                if os.path.exists(path):
-                    counter += 1
-                    n_saved += 1
-                    pbar.update(1)
-                    continue
-
-                # Convert the frame to a PIL Image
-                pil_image = Image.fromarray(frame)
-
-                # Save the PIL Image as PNG
-                pil_image.save(path)
-
-                counter += 1
-                n_saved += 1
-
-                if n_saved >= N_FRAME_PER_VID:
-                    break
-
+    video = os.listdir(VIDEO_PATH)
+    assert len(video) == 1
+    video = video[0]
+    # print(video)
+    cap = cv2.VideoCapture(os.path.join(VIDEO_PATH, video))
+    # ret, frame = cap.read()
+    # print(ret, frame)
+    
+    frame_number = 0
+    with tqdm(total=N_FRAME_PER_VID, desc=f"Creating images from video: {url}") as pbar:
+        while cap.isOpened():
+            # print("stepped inside")
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if frame_number % frac_part == 0:
+                cv2.imwrite(f"{FRAMES_PATH}/frame_{frame_number:04d}.jpg", frame)
                 pbar.update(1)
+            frame_number += 1
+            if frame_number * frac_part >= N_FRAME_PER_VID:
+                break
+    cap.release()
+    print("Frames extracted successfully!")
+    
+    # Remove downloaded video
+    os.remove(os.path.join(VIDEO_PATH, video))
 
-        # Close the video clip
-        clip.close()
-        print(f'Video {video} sliced.')
-
-        # Remove downloaded video
-        os.remove(os.path.join(VIDEO_PATH, video))
-
-    return idx
+    return
 
 def update_dataloader():
     # Assuming you have your dataset loaded into 'images' variable as a list of PIL images
