@@ -52,7 +52,7 @@ def train_loop(dataset, device):
     video = 0
     # model, criterion, optimizer = model_setup(device, model_path)
 
-    idx = 1
+    idx = 0
     while video < dataset.shape[0]:
         print(f"Training video {video}")
         idx = prepare_video(dataset, idx) + 1
@@ -117,7 +117,7 @@ def download_video(df, idx):
             frac_part = 1
         else:
             frac_part = math.floor(n_frames / N_FRAME_PER_VID)
-        # print(length, fps, n_frames, frac_part)
+            
         # Download videos and process frames
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -152,7 +152,7 @@ def prepare_images(url, frac_part):
                 cv2.imwrite(f"{FRAMES_PATH}/frame_{frame_number:04d}.jpg", frame)
                 pbar.update(1)
             frame_number += 1
-            if frame_number * frac_part >= N_FRAME_PER_VID:
+            if frame_number / frac_part >= N_FRAME_PER_VID:
                 break
     cap.release()
     print("Frames extracted successfully!")
