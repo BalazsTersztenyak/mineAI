@@ -8,10 +8,17 @@ import os
 
 from minerl.herobraine.env_specs.human_survival_specs import HumanSurvival
 
-from agent import MineRLAgent, ENV_KWARGS
+import sys
+
+# Get the absolute path of VideoPreTraining and add it to sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'VideoPreTraining')))
+
+from VideoPreTraining import lib
+from VideoPreTraining.agent import MineRLAgent, ENV_KWARGS
+import requests
 
 STEP_BEFORE_SAVE = 1024
-MAX_STEP = 300_000
+MAX_STEP = 10 # 300_000
 
 def map_range(value):
     # Define your input range
@@ -49,7 +56,36 @@ def main():
     weights = "rl-from-foundation-2x.weights"
     mock_env = HumanSurvival(**ENV_KWARGS).make()
 
-    print("---Launching MineRL enviroment (be patient)---")
+    model_url = "https://openaipublic.blob.core.windows.net/minecraft-rl/models/" + model
+    weights_url = "https://openaipublic.blob.core.windows.net/minecraft-rl/models/" + weights
+
+    if not os.path.exists(model):
+        response = requests.get(model_url)
+
+        # Check if the request was successful
+        if response.status_code == 200:
+            with open(model, 'wb') as file:
+                # pickle.dump(response.content,file)
+                file.write(response.content)
+            # print("Download complete!")
+        else:
+            print(f"Failed to download file, status code: {response.status_code}")
+            return
+
+    if not os.path.exists(weights):
+        response = requests.get(weights_url)
+
+        # Check if the request was successful
+        if response.status_code == 200:
+            with open(weights, 'wb') as file:
+                # pickle.dump(response.content,file)
+                file.write(response.content)
+            # print("Download complete!")
+        else:
+            print(f"Failed to download file, status code: {response.status_code}")
+            return
+
+    # x print("---Launching MineRL enviroment (be patient)---")
     # mock_env.reset()
 
     print("---Loading model---")
@@ -76,7 +112,7 @@ def main():
     while not done:
         action = agent.get_action(obs)
         action = convert_action(noop, action)
-        obs, reward, done, info = env.step(action)
+        obs, _, done, _ = env.step(action)
         obs['pov'] = np.transpose(obs['rgb'], (1, 2, 0))
         this_step = [obs['location_stats']['pos'][0], obs['location_stats']['pos'][1], obs['location_stats']['pos'][2], obs['location_stats']['yaw'][0], obs['location_stats']['pitch'][0]]
         delta = np.array(this_step) - np.array(prev_step)

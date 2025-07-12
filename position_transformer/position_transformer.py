@@ -4,7 +4,7 @@ import torch.nn as nn
 # import os
 # import pandas as pd
 from torch.utils.data import DataLoader#, Dataset
-from models.position_dataset import PositionDataset
+from models import PositionDataset
 from tqdm import tqdm
 import pickle 
 
@@ -109,7 +109,7 @@ def main():
     # Data loader
     train_loader = DataLoader(dataset=train_dataset, batch_size=BATCH_SIZE, shuffle=False)
     val_loader = DataLoader(dataset=val_dataset, batch_size=BATCH_SIZE, shuffle=False)
-    train_loss_list, val_loss_list = fit(model, device, opt, loss_fn, train_loader, val_loader, 20)
+    train_loss_list, val_loss_list = fit(model, device, opt, loss_fn, train_loader, val_loader, 1)
 
     with open('train_loss_list', 'ab') as fp:
         pickle.dump(train_loss_list, fp)

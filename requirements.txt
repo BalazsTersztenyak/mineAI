@@ -1,0 +1,11 @@
+pandas
+torch==1.9.0+cu111
+torchinfo
+torchvision
+yt_dlp
+opencv-python
+tqdm
+# mineclip @ git+https://github.com/jxiong21029/MineCLIP-model@56ca1b07a91ad6f757e0bc3e6dc0daddc792edeb
+# minedojo @ git+https://github.com/BalazsTersztenyak/MineDojo
+# minerl @ git+https://github.com/minerllabs/minerl@e1eea09751073ac461da1e6c8329b51eaf2c6ed5
+minerl @ git+https://github.com/minerllabs/minerl@cdeae668c2f334e3c9117adf651b5a94436b45f8 # newer commit

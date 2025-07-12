@@ -55,8 +55,10 @@ def load_model_from_checkpoint(checkpoint_path):
 # Function to test model on a datapoint
 def test_model(model, input_data):
     # with torch.no_grad():
+        criterion = nn.HuberLoss()
         output = model.forward(input_data)
         # You can also calculate loss or evaluate accuracy here if you have test targets
+        print(criterion(output, input_data))
         return output
 
 # Assuming you have your dataset loaded into 'images' variable as a list of PIL images
@@ -70,7 +72,7 @@ files.sort(key=lambda x: int(x.split('.')[0].split('_')[1]))
 for checkpoint_file in files:
     if checkpoint_file.endswith('.ckpt'):  # Assuming checkpoints have .ckpt extension
         n = int(checkpoint_file.split('.')[0].split('_')[1])
-        if n != 199:
+        if n > 199 or n%10 != 9:
             continue
 
         checkpoint_path = os.path.join(checkpoint_folder, checkpoint_file)
@@ -83,13 +85,15 @@ for checkpoint_file in files:
             for images in train_loader:
                 with torch.no_grad():
                     # Test model on the datapoint
-                    outputs = model.forward(images.to('cuda')).to('cpu')
+                    # outputs = model.forward(images.to('cuda')).to('cpu')
+                    outputs = test_model(model, images.to('cuda')).to('cpu')
                 
                 # Print or log the output
                 # print("Saving output image...")
 
                 for i, img in enumerate(outputs):
                     # Convert the frame to a PIL Image
+                    # print(torch.mean(images), torch.mean(img), torch.mean(torch.rand(3, 360, 640)))
                     pil_image = transforms.functional.to_pil_image(img)
 
                     # Save the PIL Image as PNG
@@ -97,4 +101,4 @@ for checkpoint_file in files:
 
                 pbar.update(1)
         model.to('cpu')
-        # break
+        del model

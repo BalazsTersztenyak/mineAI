@@ -1,18 +1,18 @@
-import torch
-# from torch.nn import HuberLoss
-# import torchvision.transforms as transforms
-# from torch.utils.data import DataLoader, Dataset
-import pandas as pd
-import yt_dlp
 import os
-import cv2
-from minedojo.data import YouTubeDataset
-# from ..models.encoder import Autoencoder
-import shutil
-from tqdm import tqdm
+import pandas as pd
+import torch
+from torch.nn import HuberLoss
 import math
-# from models.encoder_dataset import EncoderDataset, TRANSFORM
+import yt_dlp
+import cv2
+from tqdm import tqdm
+from torch.utils.data import DataLoader
+from models import Autoencoder
+import shutil
+from models import CustomDataset, TRANSFORM_TRAIN
 import pickle
+import gc
+
 # TODO : rework the imports
 # Hyperparameters
 N_EPOCH_PER_VIDEO = 5
@@ -29,8 +29,9 @@ def main():
 
 def setup():
     if not os.path.exists('./data/dataset/youtube_full.json'):
+        from minedojo.data import YouTubeDataset
         # Download dataset
-        youtube_dataset = YouTubeDataset(
+        YouTubeDataset(
         full=True,          # full=False for tutorial videos or 
                     # full=True for general gameplay videos
         download=True,        # download=True to automatically download data or 
@@ -50,20 +51,20 @@ def setup():
 def train_loop(dataset, device):
     model_path = None
     video = 0
-    # model, criterion, optimizer = model_setup(device, model_path)
+    model, criterion, optimizer = model_setup(device, model_path)
 
     idx = 0
-    while video < dataset.shape[0]:
-        print(f"Training video {video}")
+    while video < 200: #dataset.shape[0]:
+        # print(f"Training video {video}")
         idx = prepare_video(dataset, idx) + 1
-        break
         train_loader = update_dataloader()
         model, losses = train(video, train_loader, model, criterion, optimizer, device)
         save_model(video, model, losses)
         video += 1
+        gc.collect()
 
 def model_setup(device, model_path = None):
-    print('Start model setup')
+    # print('Start model setup')
 
     model = Autoencoder().to(device)
     model.summary()
@@ -71,16 +72,12 @@ def model_setup(device, model_path = None):
     if model_path is not None:
         model.load_state_dict(torch.load(model_path))
 
-    criterion = HuberLoss()
+    criterion = HuberLoss().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
     return model, criterion, optimizer
 
 def prepare_video(df, idx = 0):
-    """
-    Function to download videos and process frames. It takes the number of videos to download as input and does not return anything.
-    """
-
     # Prepare folders
     if os.path.exists(FRAMES_PATH):
         frames = os.listdir(FRAMES_PATH)
@@ -95,21 +92,25 @@ def prepare_video(df, idx = 0):
     os.makedirs(FRAMES_PATH, exist_ok=True)
     os.makedirs(VIDEO_PATH, exist_ok=True)
 
-    idx, url, frac_part = download_video(df, idx)
-    prepare_images(url, frac_part)
+    success = False
+    while not success:
+        idx, url, frac_part = download_video(df, idx)
+        prepare_images(url, frac_part)
+        if len(os.listdir(FRAMES_PATH)) > 0: success = True 
+        else: idx += 1
     return idx
 
 def download_video(df, idx):
     success = False
     ydl_opts = {
-        'format': 'bestvideo[height=360][ext=mp4]',  # Selects only 360p video
+        'format': 'bestvideo[height=360][ext=mp4]',  # Selects only 360p mp4 video
         'outtmpl': f'{VIDEO_PATH}/%(title)s.%(ext)s',
-        'merge_output_format': 'mp4'
+        'merge_output_format': 'mp4',
+        'quiet': True
     }
     while not success:
         # Get video URLs based on progress
         url = df['link'][idx]
-        url = 'https://www.youtube.com/watch?v=GnJimSWdNXI'
         length = df['duration'][idx]
         fps = df['fps'][idx]
         n_frames = math.floor(length * fps)
@@ -117,14 +118,12 @@ def download_video(df, idx):
             frac_part = 1
         else:
             frac_part = math.floor(n_frames / N_FRAME_PER_VID)
-            
+
         # Download videos and process frames
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
             success = True
-            # yt = YouTube(url)
-            # video = yt.streams.filter(res="360p").first()
         except:
             print(f"Video {url} unavailable, skipping")
             idx += 1
@@ -136,10 +135,8 @@ def prepare_images(url, frac_part):
     video = os.listdir(VIDEO_PATH)
     assert len(video) == 1
     video = video[0]
-    # print(video)
+
     cap = cv2.VideoCapture(os.path.join(VIDEO_PATH, video))
-    # ret, frame = cap.read()
-    # print(ret, frame)
     
     frame_number = 0
     with tqdm(total=N_FRAME_PER_VID, desc=f"Creating images from video: {url}") as pbar:
@@ -155,8 +152,7 @@ def prepare_images(url, frac_part):
             if frame_number / frac_part >= N_FRAME_PER_VID:
                 break
     cap.release()
-    print("Frames extracted successfully!")
-    
+
     # Remove downloaded video
     os.remove(os.path.join(VIDEO_PATH, video))
 
@@ -164,20 +160,18 @@ def prepare_images(url, frac_part):
 
 def update_dataloader():
     # Assuming you have your dataset loaded into 'images' variable as a list of PIL images
-    train_dataset = EncoderDataset(FRAMES_PATH) # TODO : rewrite the EncoderDataset class 
+    train_dataset = CustomDataset(FRAMES_PATH, TRANSFORM_TRAIN)
 
     # Data loader
-    train_loader = DataLoader(dataset=train_dataset, batch_size=BATCH_SIZE, shuffle=True) # TODO : rewrite the DataLoader class
-
-    print('DataLoader setup Done')
+    train_loader = DataLoader(dataset=train_dataset, batch_size=BATCH_SIZE, shuffle=True)
 
     return train_loader
 
 def train(video, train_loader, model, criterion, optimizer, device):
-    print('Train started...')
+    # print('Train started...')
 
     # Training
-    total_step = len(train_loader)
+    # total_step = len(train_loader)
     losses = []
     for epoch in range(N_EPOCH_PER_VIDEO):
         with tqdm(total=len(train_loader), desc=f"Training on video {video}: ") as pbar:
@@ -185,8 +179,6 @@ def train(video, train_loader, model, criterion, optimizer, device):
                 # Forward pass
                 images = images.to(device) 
                 outputs = model(images)
-                outputs = outputs.to('cpu')
-                images = images.to('cpu')
                 loss = criterion(outputs, images)
                 losses.append(loss.item())
 
@@ -194,25 +186,28 @@ def train(video, train_loader, model, criterion, optimizer, device):
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+                outputs = outputs.cpu()
+                images = images.cpu()
+                # print(torch.mean(images), torch.mean(outputs))
                 pbar.update(1)
 
         print(f'Epoch [{epoch+1}/{N_EPOCH_PER_VIDEO}], Loss: {loss.item()}')
-
+    gc.collect()
     return model, losses
 
 def save_model(video, model, losses):
-    print('Saving model...')
+    # print('Saving model...')
     os.makedirs(CHECKPOINTS_PATH, exist_ok=True)
 
     # Save the model checkpoint
     torch.save(model.state_dict(), os.path.join(CHECKPOINTS_PATH, f'model_{video}.ckpt'))
-    print('Model saved')
+    # print('Model saved')
 
     # Save the losses
-    with open('loss_list', 'ab') as fp:
+    with open(os.path.join(CHECKPOINTS_PATH, 'loss_list'), 'ab') as fp:
         pickle.dump(losses, fp)
 
-    print('Losses saved')
+    # print('Losses saved')
 
     # Remove the frames folder
     shutil.rmtree(FRAMES_PATH)

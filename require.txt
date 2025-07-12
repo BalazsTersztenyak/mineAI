@@ -39,8 +39,8 @@ kornia-rs==0.1.3
 lxml==5.2.1
 MarkupSafe==2.1.5
 matplotlib-inline==0.1.7
-mineclip git+https://github.com/jxiong21029/MineCLIP-model@56ca1b07a91ad6f757e0bc3e6dc0daddc792edeb
-minedojo @ git+https://github.com/MineDojo/MineDojo@2731bc27394269643b43828d9db8ab3a364601f0
+mineclip @ git+https://github.com/jxiong21029/MineCLIP-model@56ca1b07a91ad6f757e0bc3e6dc0daddc792edeb
+minedojo @ git+https://github.com/BalazsTersztenyak/MineDojo
 minerl @ git+https://github.com/minerllabs/minerl@e1eea09751073ac461da1e6c8329b51eaf2c6ed5
 moviepy==1.0.3
 mpmath==1.3.0
